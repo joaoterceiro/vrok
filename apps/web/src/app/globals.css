@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ----------------------------------------------------------------
+   Zora OS — dark-mode ONLY. No light theme. No toggle.
+   Tokens mapped from the `shark` palette declared in tailwind.config.
+   shark-950 #09090b  shark-900 #18181b  shark-800 #2a2a2d
+   shark-700 #3f3f46  shark-600 #52525b  shark-500 #71717a
+   shark-400 #a1a1aa  shark-300 #d4d4d8  shark-200 #e4e4e7
+   shark-100 #f4f4f5  shark-50  #fafafa
+   ---------------------------------------------------------------- */
+
+@layer base {
+  :root {
+    /* shark-950 — page background */
+    --background: 240 6% 4%;
+    --foreground: 0 0% 98%;
+
+    /* Panels / cards — shark-900 */
+    --surface: 240 6% 10%;
+    --card: 240 6% 10%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 5% 12%;
+    --popover-foreground: 0 0% 98%;
+
+    /* Surface tints — shark-800 / 700 */
+    --surface-2: 240 4% 17%;
+    --surface-3: 240 4% 26%;
+
+    /* Primary = brand-500 (#b2fa27 lime, single accent) */
+    --primary: 78 95% 57%;
+    /* Dark text on lime — light text would fail WCAG contrast. */
+    --primary-foreground: 240 6% 4%;
+
+    /* Secondary = shark-800 */
+    --secondary: 240 4% 17%;
+    --secondary-foreground: 0 0% 98%;
+
+    /* Muted = shark-800 surface, shark-400 text */
+    --muted: 240 4% 17%;
+    --muted-foreground: 240 5% 65%;
+
+    /* Accent (hover) = shark-700 */
+    --accent: 240 4% 26%;
+    --accent-foreground: 0 0% 98%;
+
+    /* Destructive = rose-500 */
+    --destructive: 350 89% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* Success = brand-500 (#b2fa27 lime) — same as primary */
+    --success: 78 95% 57%;
+    --success-foreground: 240 6% 4%;
+
+    /* Borders = shark-800; focus ring = brand-500 (lime) */
+    --border: 240 4% 17%;
+    --input: 240 4% 17%;
+    --ring: 78 95% 57%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  /* Tabular numbers for timestamps & counters */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Scrollbars — dark, subtle */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--surface-3));
+    border-radius: 8px;
+    border: 2px solid hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+
+  /* Focus ring — keyboard nav only */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* Safe area insets for mobile composer */
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@layer components {
+  /* Skeleton shimmer base — uses shark-800 → shark-700 */
+  .skeleton {
+    @apply animate-pulse rounded bg-surface-2;
+  }
+
+  /* Section label — uppercase, tracking-wide, muted */
+  .section-label {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-muted-foreground;
+  }
+}

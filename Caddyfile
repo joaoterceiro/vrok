@@ -1,0 +1,27 @@
+# Caddyfile — reverse proxy local + produção.
+#
+# Em dev (PUBLIC_DOMAIN=zora.local), Caddy serve em :80 sem TLS.
+# Em produção, defina PUBLIC_DOMAIN com o domínio real e Caddy obterá TLS
+# Let's Encrypt automaticamente.
+
+{
+	email {$ACME_EMAIL:admin@zora.local}
+	# Em dev local, sem auto-https (tls automático falha em zora.local).
+	auto_https off
+}
+
+# Bloco principal: listener HTTP genérico (qualquer host) — funciona em
+# http://localhost ou http://zora.local.
+:80 {
+	encode zstd gzip
+	reverse_proxy app:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# Bloco de produção: descomente e use PUBLIC_DOMAIN/ACME_EMAIL definidos.
+# {$PUBLIC_DOMAIN} {
+# 	encode zstd gzip
+# 	reverse_proxy app:3000
+# }

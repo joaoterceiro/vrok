@@ -1,0 +1,239 @@
+name: zora-os
+
+services:
+  # ---------------------------------------------------------
+  # PostgreSQL — armazena conversas, mensagens, contatos, etc.
+  # ---------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-zora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zora_dev_password_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-zora}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zora} -d ${POSTGRES_DB:-zora}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------
+  # Redis — BullMQ, cache, pub/sub para Socket.IO
+  # ---------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------
+  # MinIO — S3-compatible object storage para mídia
+  # ---------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-zora_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_minio_password_min_8_chars}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console web
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    # Bucket stays PRIVATE — providers receive presigned URLs (1h TTL) generated
+    # by the worker, not direct anonymous access. Removed `mc anonymous set
+    # download` from the previous bootstrap.
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/$$MINIO_BUCKET &&
+      mc anonymous set none local/$$MINIO_BUCKET &&
+      echo 'MinIO bucket ready (private)'
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-zora_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_minio_password_min_8_chars}
+      MINIO_BUCKET: ${MINIO_BUCKET:-zora-media}
+
+  # ---------------------------------------------------------
+  # Evolution API — WhatsApp via Baileys
+  # ---------------------------------------------------------
+  evolution:
+    # Using the rebranded official image (evoapicloud) which pulls latest
+    # Baileys with current WhatsApp Web protocol version. The legacy
+    # `atendai/evolution-api` images (v2.1.1, v2.2.3, homolog) all ship a
+    # stale Baileys that WhatsApp rejects at the Noise handshake stage with
+    # "Connection Failure" (socket.js:524). Override version manually below
+    # via CONFIG_SESSION_PHONE_VERSION to keep working when WA updates again.
+    image: evoapicloud/evolution-api:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      CORS_ORIGIN: "*"
+      CORS_METHODS: "GET,POST,PUT,DELETE"
+      DEL_INSTANCE: "false"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgres://${POSTGRES_USER:-zora}:${POSTGRES_PASSWORD:-zora_dev_password_change_me}@postgres:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_exchange
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/1
+      CACHE_REDIS_PREFIX_KEY: evolution
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-change_me_evolution_global_api_key}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      LOG_LEVEL: ERROR,WARN,INFO,DEBUG,VERBOSE,LOG
+      LOG_COLOR: "true"
+      LOG_BAILEYS: debug
+      QRCODE_LIMIT: 30
+      QRCODE_COLOR: "#198754"
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      CONFIG_SESSION_PHONE_CLIENT: "Vrok"
+      CONFIG_SESSION_PHONE_NAME: "Chrome"
+      # Manually pin the WhatsApp Web version Baileys announces. WhatsApp
+      # rejects connections with stale versions ("Connection Failure" on
+      # Noise handshake). Update this if WA changes the protocol again.
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1023223821"
+      LANGUAGE: "pt-BR"
+    volumes:
+      - evolution-instances:/evolution/instances
+    ports:
+      - "8080:8080"
+
+  # ---------------------------------------------------------
+  # App — Next.js + Socket.IO (custom server)
+  # ---------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-zora}:${POSTGRES_PASSWORD:-zora_dev_password_change_me}@postgres:5432/${POSTGRES_DB:-zora}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-zora_minio_admin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change_me_minio_password_min_8_chars}
+      MINIO_BUCKET: ${MINIO_BUCKET:-zora-media}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9000}
+      # In-Docker MinIO URL — the outbound worker hands this to providers
+      # (Evolution etc.) as the public attachment URL. Bucket is read-public.
+      MINIO_INTERNAL_URL: http://minio:9000
+      EVOLUTION_BASE_URL: http://evolution:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-change_me_evolution_global_api_key}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      # Used by callers from OTHER containers (Evolution webhooks etc).
+      # `localhost` from inside another container resolves to that container,
+      # so we must use the Docker service name `app` for inter-container calls.
+      INTERNAL_APP_URL: http://app:3000
+      APP_SECRET: ${APP_SECRET:-change-me-to-a-long-random-string-32-bytes-min}
+      AUTH_SECRET: ${AUTH_SECRET:-change-me-to-another-long-random-string-32-bytes}
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-change_me_meta_webhook_verify_token}
+    ports:
+      - "3000:3000"
+
+  # ---------------------------------------------------------
+  # Worker — BullMQ background processors
+  # ---------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-zora}:${POSTGRES_PASSWORD:-zora_dev_password_change_me}@postgres:5432/${POSTGRES_DB:-zora}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-zora_minio_admin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change_me_minio_password_min_8_chars}
+      MINIO_BUCKET: ${MINIO_BUCKET:-zora-media}
+      # Public-read MinIO URL used to hand attachment URLs to providers.
+      MINIO_INTERNAL_URL: http://minio:9000
+      INTERNAL_APP_URL: http://app:3000
+      EVOLUTION_BASE_URL: http://evolution:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-change_me_evolution_global_api_key}
+      APP_SECRET: ${APP_SECRET:-change-me-to-a-long-random-string-32-bytes-min}
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+
+  # ---------------------------------------------------------
+  # Caddy — reverse proxy com TLS automático
+  # (em dev, expõe app via http://localhost; em prod usa HTTPS)
+  # ---------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-zora.local}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@zora.local}
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  evolution-instances:
+  caddy-data:
+  caddy-config:
