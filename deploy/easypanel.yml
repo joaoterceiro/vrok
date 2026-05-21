@@ -1,0 +1,228 @@
+# ============================================================================
+# Vrok — Easypanel Compose Stack
+# ============================================================================
+# Cole o conteúdo deste arquivo em:
+#   Easypanel → Project → Create Service → Compose
+#
+# Antes de subir, defina estas variáveis em "Environment" do projeto:
+#   APP_URL              https://vrok.seudominio.com   (URL pública)
+#   AUTH_SECRET          (gere com: openssl rand -base64 32)
+#   APP_SECRET           (gere com: openssl rand -base64 32)
+#   POSTGRES_PASSWORD    senha forte
+#   MINIO_ROOT_PASSWORD  ≥ 8 chars
+#   EVOLUTION_API_KEY    chave global da Evolution (qualquer string)
+#   META_VERIFY_TOKEN    token p/ webhook Meta (qualquer string)
+#   GHCR_USERNAME        seu user GitHub (para puxar a imagem)
+#   GHCR_TOKEN           PAT GitHub com `read:packages`
+#
+# Opcionais (podem ser configurados depois pela UI em ⚙ LLM/IA):
+#   ANTHROPIC_API_KEY
+#   OPENAI_API_KEY
+#   GROQ_API_KEY
+#
+# ---------------------------------------------------------------------------
+# Exposição pública (Easypanel → Domains, em cada serviço):
+# ---------------------------------------------------------------------------
+#   app           porta 3000  → vrok.seudominio.com   (HTTPS automático)
+#   minio         porta 9001  → minio.seudominio.com  (opcional — console MinIO)
+#   evolution     porta 8080  → evo.seudominio.com    (opcional — só se quiser
+#                                                       acessar a UI da Evolution)
+# ---------------------------------------------------------------------------
+
+services:
+  # ---------------------------------------------------------
+  # PostgreSQL — banco principal
+  # ---------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zora
+      POSTGRES_PASSWORD: $(POSTGRES_PASSWORD)
+      POSTGRES_DB: zora
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zora -d zora"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------
+  # Redis — BullMQ + cache + pub/sub
+  # ---------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------
+  # MinIO — object storage S3-compatible para mídia
+  # ---------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: zora_minio_admin
+      MINIO_ROOT_PASSWORD: $(MINIO_ROOT_PASSWORD)
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Cria o bucket private uma vez no boot.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/zora-media &&
+      mc anonymous set none local/zora-media &&
+      echo 'MinIO bucket ready (private)'
+      "
+    environment:
+      MINIO_ROOT_USER: zora_minio_admin
+      MINIO_ROOT_PASSWORD: $(MINIO_ROOT_PASSWORD)
+    restart: "no"
+
+  # ---------------------------------------------------------
+  # Evolution API — WhatsApp via Baileys
+  # ---------------------------------------------------------
+  evolution:
+    image: evoapicloud/evolution-api:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      CORS_ORIGIN: "*"
+      CORS_METHODS: "GET,POST,PUT,DELETE"
+      DEL_INSTANCE: "false"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgres://zora:$(POSTGRES_PASSWORD)@postgres:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_exchange
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/1
+      CACHE_REDIS_PREFIX_KEY: evolution
+      AUTHENTICATION_API_KEY: $(EVOLUTION_API_KEY)
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      LOG_LEVEL: ERROR,WARN,INFO
+      QRCODE_LIMIT: 30
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      CONFIG_SESSION_PHONE_CLIENT: "Vrok"
+      CONFIG_SESSION_PHONE_NAME: "Chrome"
+      # Pin manual da versão do WhatsApp Web que o Baileys anuncia. Atualize
+      # se o WhatsApp mudar o protocolo (sintoma: "Connection Failure" no QR).
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1023223821"
+      LANGUAGE: "pt-BR"
+    volumes:
+      - evolution-instances:/evolution/instances
+
+  # ---------------------------------------------------------
+  # App — Next.js + Socket.IO (porta 3000)
+  # ---------------------------------------------------------
+  # IMPORTANTE:
+  #   1. No GitHub Actions, publique a imagem para
+  #      ghcr.io/<seu-user>/vrok-web:latest
+  #   2. Em Easypanel → Registry, adicione um ghcr.io credentials com seu PAT
+  # ---------------------------------------------------------
+  app:
+    image: ghcr.io/joaoterceiro/vrok-web:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://zora:$(POSTGRES_PASSWORD)@postgres:5432/zora
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: zora_minio_admin
+      MINIO_SECRET_KEY: $(MINIO_ROOT_PASSWORD)
+      MINIO_BUCKET: zora-media
+      MINIO_PUBLIC_URL: $(APP_URL)/_minio
+      MINIO_INTERNAL_URL: http://minio:9000
+      EVOLUTION_BASE_URL: http://evolution:8080
+      EVOLUTION_API_KEY: $(EVOLUTION_API_KEY)
+      APP_URL: $(APP_URL)
+      INTERNAL_APP_URL: http://app:3000
+      NEXTAUTH_URL: $(APP_URL)
+      APP_SECRET: $(APP_SECRET)
+      AUTH_SECRET: $(AUTH_SECRET)
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+      OPENAI_API_KEY: $(OPENAI_API_KEY)
+      GROQ_API_KEY: $(GROQ_API_KEY)
+      META_VERIFY_TOKEN: $(META_VERIFY_TOKEN)
+      WEBHOOK_ENFORCE_SIGNATURE: "true"
+      LOG_LEVEL: info
+    # Exponha a porta 3000 em Easypanel → Domains
+    # Para webhooks Meta funcionarem, HTTPS automático é obrigatório.
+
+  # ---------------------------------------------------------
+  # Worker — BullMQ background processors
+  # ---------------------------------------------------------
+  worker:
+    image: ghcr.io/joaoterceiro/vrok-worker:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://zora:$(POSTGRES_PASSWORD)@postgres:5432/zora
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: zora_minio_admin
+      MINIO_SECRET_KEY: $(MINIO_ROOT_PASSWORD)
+      MINIO_BUCKET: zora-media
+      MINIO_INTERNAL_URL: http://minio:9000
+      INTERNAL_APP_URL: http://app:3000
+      EVOLUTION_BASE_URL: http://evolution:8080
+      EVOLUTION_API_KEY: $(EVOLUTION_API_KEY)
+      APP_SECRET: $(APP_SECRET)
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+      OPENAI_API_KEY: $(OPENAI_API_KEY)
+      GROQ_API_KEY: $(GROQ_API_KEY)
+      SLACK_ALERT_WEBHOOK: $(SLACK_ALERT_WEBHOOK)
+      LOG_LEVEL: info
+
+# ============================================================================
+# Volumes — Easypanel persiste estes em /etc/easypanel/projects/<proj>/volumes
+# ============================================================================
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  evolution-instances:
