@@ -29,6 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { useSocketEvent, useSocketRoom } from '@/hooks/use-socket';
+import { EmbeddedSignupButton } from '@/components/settings/embedded-signup-button';
 
 type ChannelType = 'wa_evolution' | 'wa_cloud' | 'instagram' | 'telegram' | 'webchat' | 'email';
 type ChannelStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -564,6 +565,23 @@ function renderTypeFields(type: ChannelType): React.ReactNode {
     case 'wa_cloud':
       return (
         <>
+          <div className="rounded-lg border border-brand-500/30 bg-brand-500/5 p-4">
+            <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+              🚀 Recomendado — Cadastro Incorporado
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Conecte via popup oficial da Meta. Token, WABA, Phone Number e webhook são
+              gerados automaticamente. O app fica subscribed na WBA (libera criação de templates).
+            </p>
+            <EmbeddedSignupButton />
+          </div>
+
+          <div className="my-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <Separator className="flex-1" />
+            <span className="uppercase tracking-wider">ou configure manualmente</span>
+            <Separator className="flex-1" />
+          </div>
+
           <FormRow name="phoneNumberId" label="Phone Number ID" required />
           <FormRow name="wabaId" label="WABA ID" required={false} />
           <FormRow name="accessToken" label="Access Token (Bearer)" type="password" required />
