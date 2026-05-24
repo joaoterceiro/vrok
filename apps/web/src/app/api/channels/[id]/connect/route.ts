@@ -42,6 +42,10 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     'http://app:3000'
   ).replace(/\/+$/, '');
 
+  // For URLs returned to the BROWSER (Meta App Dashboard, embed scripts),
+  // always use the PUBLIC APP_URL — Meta + clients can't reach `http://app:3000`.
+  const publicAppUrl = (process.env.APP_URL ?? appUrl).replace(/\/+$/, '');
+
   try {
     if (channel.type === 'wa_evolution') {
       const webhookUrl = `${appUrl}/api/webhooks/evolution`;
@@ -59,10 +63,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       return NextResponse.json({ webhookUrl });
     }
     if (channel.type === 'wa_cloud' || channel.type === 'instagram') {
+      // Esta URL vai ser cadastrada na Meta App Dashboard — usar URL pública.
       const webhookUrl =
         channel.type === 'wa_cloud'
-          ? `${appUrl}/api/webhooks/wa-cloud`
-          : `${appUrl}/api/webhooks/instagram`;
+          ? `${publicAppUrl}/api/webhooks/wa-cloud`
+          : `${publicAppUrl}/api/webhooks/instagram`;
       await db
         .update(channels)
         .set({ status: 'connected', lastConnectedAt: new Date() })
@@ -79,8 +84,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         .update(channels)
         .set({ status: 'connected', lastConnectedAt: new Date() })
         .where(eq(channels.id, id));
-      const embedUrl = `${appUrl}/api/widget/${id}/embed.js`;
-      const widgetUrl = `${appUrl}/widget/${id}`;
+      // URLs públicas — embed roda no browser do visitante final.
+      const embedUrl = `${publicAppUrl}/api/widget/${id}/embed.js`;
+      const widgetUrl = `${publicAppUrl}/widget/${id}`;
       return NextResponse.json({
         embedSnippet: `<script src="${embedUrl}" defer></script>`,
         widgetUrl,
