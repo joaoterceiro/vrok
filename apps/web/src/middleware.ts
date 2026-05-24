@@ -16,6 +16,7 @@ const PUBLIC_PATHS = [
   '/termos',
   '/exclusao-de-dados',
   '/api/lgpd/request',
+  '/api/public-config',
 ];
 
 // Edge-safe instance — no DB adapter, just session decoding for the middleware.

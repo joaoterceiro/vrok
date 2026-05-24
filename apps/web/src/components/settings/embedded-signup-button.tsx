@@ -49,9 +49,27 @@ export function EmbeddedSignupButton() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SignupResult | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
+  const [APP_ID, setAppId] = useState<string | null>(
+    process.env.NEXT_PUBLIC_WHATSAPP_APP_ID ?? null,
+  );
+  const [CONFIG_ID, setConfigId] = useState<string | null>(
+    process.env.NEXT_PUBLIC_WHATSAPP_CONFIGURATION_ID ?? null,
+  );
 
-  const APP_ID = process.env.NEXT_PUBLIC_WHATSAPP_APP_ID;
-  const CONFIG_ID = process.env.NEXT_PUBLIC_WHATSAPP_CONFIGURATION_ID;
+  // Runtime config — Next.js NEXT_PUBLIC_* é build-time. Buscamos do server
+  // pra suportar trocar IDs sem rebuild da imagem Docker.
+  useEffect(() => {
+    if (APP_ID && CONFIG_ID) return;
+    fetch('/api/public-config')
+      .then((r) => r.json())
+      .then((cfg: { whatsapp?: { appId?: string; configurationId?: string } }) => {
+        if (cfg.whatsapp?.appId) setAppId(cfg.whatsapp.appId);
+        if (cfg.whatsapp?.configurationId) setConfigId(cfg.whatsapp.configurationId);
+      })
+      .catch(() => {
+        /* deixa o aviso de "não configurado" aparecer */
+      });
+  }, [APP_ID, CONFIG_ID]);
 
   useEffect(() => {
     if (!APP_ID) return;
