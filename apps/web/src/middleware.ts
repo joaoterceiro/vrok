@@ -11,6 +11,11 @@ const PUBLIC_PATHS = [
   '/api/webhooks',
   '/api/health',
   '/widget',
+  // Páginas legais públicas (LGPD + Meta App Review obrigatórias)
+  '/privacidade',
+  '/termos',
+  '/exclusao-de-dados',
+  '/api/lgpd/request',
 ];
 
 // Edge-safe instance — no DB adapter, just session decoding for the middleware.
